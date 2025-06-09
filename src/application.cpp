@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <list>
 #include <random>
 #include <ranges>
@@ -76,6 +77,19 @@ struct Fence : public sf::Drawable {
   }
 };
 
+struct Rocket : public sf::Drawable {
+  std::unique_ptr<fb::Animation, int (*)(Animation *)> animation;
+  std::unique_ptr<sf::Sprite> body;
+
+  void draw(sf::RenderTarget &r, sf::RenderStates s) const override {
+    r.draw(*body, s);
+  }
+
+  Rocket() : animation{nullptr, fb::DestroyAnimation} {}
+
+  void update(Application *, bool animate);
+};
+
 struct InGame : public Scene {
 public:
   InGame(Application *ptr) : Scene(ptr) {}
@@ -90,6 +104,7 @@ public:
 private:
   std::list<Button> buttons_;
   std::list<Fence> fences_;
+  std::list<Rocket> rockets_;
   TextureMap textures_;
   FontMap fonts_;
 
@@ -440,6 +455,8 @@ int InGame::render() {
   Render(app_, &bg_);
   for (auto &&f : fences_)
     Render(app_, &f);
+  for (auto &&r : rockets_)
+    Render(app_, &r);
   Render(app_, bird_.body.get());
   for (auto &&b : buttons_)
     Render(app_, &b);
@@ -468,7 +485,7 @@ int InGame::update() {
     }
 
     if (IsFlapRequested(app_)) {
-      v_ -= 1;
+      v_ -= 0.5;
     }
 
     for (auto &&f : fences_) {
@@ -489,6 +506,33 @@ int InGame::update() {
         }
     }
 
+    if (GetScore(app_) > 10) {
+      for (auto &&r : rockets_) {
+        r.update(app_, !gameOver_);
+        if (auto bb = r.body->getGlobalBounds();
+            bb.findIntersection(bird_.body->getGlobalBounds())) {
+          gameOver_ = true;
+          break;
+        }
+
+        const auto ww = fb::GetWindowSizeX(app_), wh = fb::GetWindowSizeY(app_);
+        if (r.body->getPosition().x < -r.body->getGlobalBounds().size.x)
+          r.body->setPosition(
+              {ww * 2 + fb::GetRandomNumber(app_, 0, ww), wh / 2.f});
+        else {
+          static float prevPos = 0, inc = 6.28 / 1800.f;
+          r.body->move({-5, 0});
+          r.body->setPosition(
+              {r.body->getPosition().x,
+               fb::GetWindowSizeY(app_) / 2.f +
+                   std::sin(prevPos) * fb::GetWindowSizeY(app_) * 0.4f});
+          prevPos += inc;
+          if (prevPos > 6.28)
+            prevPos = 0;
+        }
+      }
+    }
+
     const auto bb = bird_.body->getGlobalBounds();
     const auto p = bird_.body->getPosition();
 
@@ -502,6 +546,7 @@ int InGame::update() {
 int InGame::clear() {
   buttons_.clear();
   textures_.clear();
+  rockets_.clear();
   fonts_.clear();
   fences_.clear();
   score_ = nullptr;
@@ -616,9 +661,72 @@ int CreateInGameFences(fb::Application *app_, auto &fences_) {
 
   return fb::Result::Success;
 }
+
+int CreateInGameRockets(fb::Application *app_, auto &textures_,
+                        auto &rockets_) {
+  if (auto r = fb::ReadTexture(&textures_, "Fireball", "./img/projectile.png");
+      r != fb::Result::Success) {
+    fb::LogErr("Failed to read Fireball sprite sheet with error code: ", r);
+    return r;
+  }
+
+  for (unsigned i = 0; i < 1; ++i) {
+    rockets_.push_back({});
+    auto r = &rockets_.back();
+    fb::Animation *animation{nullptr};
+    fb::CreateAnimation(animation);
+    r->animation = std::unique_ptr<fb::Animation, int (*)(fb::Animation *)>{
+        animation, fb::DestroyAnimation};
+
+    fb::Frame *f1, *f2, *f3, *f4, *f5;
+    fb::AddFrame(animation, f1, 60, 645, 330, 80);
+    fb::AddFrame(animation, f2, 455, 645, 350, 80);
+    fb::AddFrame(animation, f3, 860, 640, 360, 80);
+    fb::AddFrame(animation, f4, 1270, 640, 360, 80);
+    fb::AddFrame(animation, f5, 1680, 640, 365, 80);
+
+    fb::FrameSeq *fly;
+    fb::AddFrameSequence(animation, fly);
+    fb::AddFrameToSequence(fly, f1);
+    fb::AddFrameToSequence(fly, f2);
+    fb::AddFrameToSequence(fly, f3);
+    fb::AddFrameToSequence(fly, f4);
+    fb::AddFrameToSequence(fly, f5);
+
+    fb::SetFrameSequence(animation, fly);
+    fb::SetFrameDuration(fly, std::chrono::milliseconds{100});
+
+    r->body =
+        std::unique_ptr<sf::Sprite>{new sf::Sprite{textures_.at("Fireball")}};
+    r->body->setPosition(
+        {fb::GetWindowSizeX(app_) * (i + 1), 250.f + 150.f * i});
+    r->body->setTextureRect({{60, 645}, {330, 80}});
+
+    if (fb::GetWindowSizeX(app_) < 1920)
+      r->body->scale({0.5f, 0.5f});
+  }
+
+  return fb::Result::Success;
+}
+
 } // namespace
 
 namespace fb {
+void Rocket::update(Application *, bool animate) {
+  if (animation && animate) {
+    Frame *af{nullptr};
+    GetActiveFrame(animation.get(), af);
+    sf::IntRect r{};
+    if (af) {
+      GetFrameLeft(af, &r.position.x);
+      GetFrameTop(af, &r.position.y);
+      GetFrameWidth(af, &r.size.x);
+      GetFrameHeight(af, &r.size.y);
+      body->setTextureRect(r);
+    }
+  }
+}
+
 void Bird::update(Application *, bool animate) {
   if (animation && animate) {
     Frame *af{nullptr};
@@ -671,6 +779,12 @@ int InGame::build() {
 
   if (auto r = CreateInGameFences(app_, fences_); r != Result::Success) {
     LogErr("Failed to create fences with error code: ", r);
+    return r;
+  }
+
+  if (auto r = CreateInGameRockets(app_, textures_, rockets_);
+      r != Result::Success) {
+    LogErr("Failed to create rockets with error code: ", r);
     return r;
   }
   return Result::Success;
