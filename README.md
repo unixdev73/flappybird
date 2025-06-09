@@ -2,15 +2,7 @@
 
 To build the game you will need to install:
 
-- SFML
-- Box2D
-
-On debian-based distros (ubuntu / wsl2 / mint),
-you should be able to get the pre-requisites like so:
-
-```console
-sudo apt install libbox2d-dev libsfml-dev
-```
+- SFMLv3 (https://www.sfml-dev.org)
 
 Once the dependencies are met:
 
@@ -23,7 +15,7 @@ make -C build
 Optionally, you may pass a specific resolution as a parameter:
 
 ```console
-./build/flappybird/run 1920 1080
+./build/flappybird/run -w 1920 -h 1080
 ```
 
 # How to play
